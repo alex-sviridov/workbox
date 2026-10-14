@@ -1,0 +1,122 @@
+# Step 1: isolated Claude Code pod for k3s.
+#   kubectl apply -f k8s/claude.yaml
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: claude
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: claude-home           
+  namespace: claude
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources: { requests: { storage: 5Gi } }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: claude-work            # /work: the agent's working directory
+  namespace: claude
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources: { requests: { storage: 20Gi } }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: claude
+  namespace: claude
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: claude
+  namespace: claude
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: claude } }
+  template:
+    metadata:
+      labels: { app: claude }
+    spec:
+      serviceAccountName: claude
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      nodeSelector: { kubernetes.io/arch: amd64 }
+      # runtimeClassName: gvisor   # stronger isolation, if installed
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: claude
+          image: ghcr.io/alex-sviridov/workbox:latest-sudo
+          imagePullPolicy: IfNotPresent
+          env:
+            # Optional auth via Secret (otherwise run /login once inside the session).
+            - name: ANTHROPIC_API_KEY
+              valueFrom: { secretKeyRef: { name: claude-auth, key: ANTHROPIC_API_KEY, optional: true } }
+            - name: CLAUDE_CODE_OAUTH_TOKEN
+              valueFrom: { secretKeyRef: { name: claude-auth, key: CLAUDE_CODE_OAUTH_TOKEN, optional: true } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 500m, memory: 1Gi }
+            limits:   { cpu: "2",  memory: 4Gi }
+          livenessProbe:
+            exec: { command: ["tmux", "has-session", "-t", "claude"] }
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          volumeMounts:
+            - { name: home, mountPath: /home/node }
+            - { name: work, mountPath: /work }
+            - { name: tmp,  mountPath: /tmp }
+      volumes:
+        - name: home
+          persistentVolumeClaim: { claimName: claude-home }
+        - name: work
+          persistentVolumeClaim: { claimName: claude-work }
+        - name: tmp
+          emptyDir: { sizeLimit: 2Gi }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: default-deny, namespace: claude }
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+# DNS + HTTPS to public IPs only (no cluster, no LAN, no cloud metadata).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: claude-egress, namespace: claude }
+spec:
+  podSelector: { matchLabels: { app: claude } }
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+          podSelector: { matchLabels: { k8s-app: kube-dns } }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
+      ports:
+        - { protocol: TCP, port: 443 }
