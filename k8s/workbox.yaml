@@ -4,7 +4,7 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: claude
+  name: workbox
   labels:
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/enforce-version: latest
@@ -13,7 +13,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: claude-home           
-  namespace: claude
+  namespace: workbox
 spec:
   accessModes: ["ReadWriteOnce"]
   storageClassName: local-path
@@ -23,7 +23,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: claude-work            # /work: the agent's working directory
-  namespace: claude
+  namespace: workbox
 spec:
   accessModes: ["ReadWriteOnce"]
   storageClassName: local-path
@@ -32,24 +32,24 @@ spec:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: claude
-  namespace: claude
+  name: workbox
+  namespace: workbox
 automountServiceAccountToken: false
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: claude
-  namespace: claude
+  name: workbox
+  namespace: workbox
 spec:
   replicas: 1
   strategy: { type: Recreate }
-  selector: { matchLabels: { app: claude } }
+  selector: { matchLabels: { app: workbox } }
   template:
     metadata:
-      labels: { app: claude }
+      labels: { app: workbox }
     spec:
-      serviceAccountName: claude
+      serviceAccountName: workbox
       automountServiceAccountToken: false
       enableServiceLinks: false
       nodeSelector: { kubernetes.io/arch: amd64 }
@@ -74,9 +74,9 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: { drop: ["ALL"] }
-          resources:
-            requests: { cpu: 500m, memory: 1Gi }
-            limits:   { cpu: "2",  memory: 4Gi }
+            resources:
+              requests: { cpu: 500m, memory: 1Gi }
+              limits:   { cpu: "2",  memory: 2Gi }
           livenessProbe:
             exec: { command: ["tmux", "has-session", "-t", "claude"] }
             initialDelaySeconds: 10
@@ -95,7 +95,7 @@ spec:
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
-metadata: { name: default-deny, namespace: claude }
+metadata: { name: default-deny, namespace: workbox }
 spec:
   podSelector: {}
   policyTypes: ["Ingress", "Egress"]
@@ -103,9 +103,9 @@ spec:
 # DNS + HTTPS to public IPs only (no cluster, no LAN, no cloud metadata).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
-metadata: { name: claude-egress, namespace: claude }
+metadata: { name: workbox-egress, namespace: workbox }
 spec:
-  podSelector: { matchLabels: { app: claude } }
+  podSelector: { matchLabels: { app: workbox } }
   policyTypes: ["Egress"]
   egress:
     - to:

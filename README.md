@@ -13,8 +13,8 @@ docker save workbox:1 | sudo k3s ctr images import -     # on the node (or push 
 ## Deploy
  
 ```bash
-kubectl apply -f k8s/claude.yaml
-kubectl -n claude rollout status deploy/claude
+kubectl apply -f k8s/workbox.yaml
+kubectl -n workbox rollout status deploy/workbox
 ```
  
 Auth, pick one:
@@ -27,15 +27,15 @@ After creating the secret: `kubectl -n claude rollout restart deploy/claude`.
 ## Connect / disconnect
  
 ```bash
-kubectl -n claude exec -it deploy/claude -- tmux attach -t claude
+kubectl -n workbox exec -it deploy/workbox -- tmux attach -t claude
 ```
  
 - Detach (leave Claude running): **Ctrl-b** then **d**. Closing the terminal also just detaches.
 - Scroll back: mouse wheel, or Ctrl-b [ .
 - First start asks you to confirm bypass-permissions mode and set up the theme; that's remembered.
 - After `/exit`, you get a prompt: Enter restarts Claude, `s` opens a bash shell (exit it to get Claude back); it auto-restarts after 10 s. Use `/resume` to pick up an earlier conversation.
-- A plain shell next to the running session: `kubectl -n claude exec -it deploy/claude -- bash`, or Ctrl-b c inside tmux for a new window.
-- Copy files: `kubectl -n claude cp ./file deploy/claude:/work/` (use the pod name if your kubectl needs it).
+- A plain shell next to the running session: `kubectl -n workbox exec -it deploy/workbox -- bash`, or Ctrl-b c inside tmux for a new window.
+- Copy files: `kubectl -n workbox cp ./file deploy/workbox:/work/` (use the pod name if your kubectl needs it).
 ## What the agent can and can't do
  
 Inside the pod it can do anything without asking: read and write `/work` and `$HOME`, run commands, and use HTTPS to the internet.
