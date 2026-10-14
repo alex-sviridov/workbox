@@ -2,7 +2,7 @@ name: build-workbox
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -47,7 +47,8 @@ jobs:
 
       - uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ./container
+          file: ./container/Dockerfile
           platforms: linux/amd64
           push: true
           build-args: |
