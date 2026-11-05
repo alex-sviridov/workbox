@@ -65,7 +65,6 @@ ENV HOME=/home/node \
     GOPATH=/home/node/go \
     PATH=/home/node/.local/bin:/home/node/.cargo/bin:/home/node/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     DISABLE_AUTOUPDATER=1 \
-    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
 # Claude Code refuses --dangerously-skip-permissions as root, so run as the image's "node" user.
 USER 1000:1000
