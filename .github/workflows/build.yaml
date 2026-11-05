@@ -16,12 +16,10 @@ jobs:
     strategy:
       matrix:
         include:
-          - variant: default
-            with_sudo: "false"
+          - variant: base
             suffix: ""
-          - variant: sudo
-            with_sudo: "true"
-            suffix: "-sudo"
+          - variant: ghidra
+            suffix: "-ghidra"
     steps:
       - uses: actions/checkout@v4
 
@@ -50,10 +48,12 @@ jobs:
           context: ./container
           file: ./container/Dockerfile
           platforms: linux/amd64
+          target: ${{ matrix.variant }}
           push: true
-          build-args: |
-            WITH_SUDO=${{ matrix.with_sudo }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.variant }}
+          # ghidra builds on top of base, so it can reuse base's cached layers too
+          cache-from: |
+            type=gha,scope=base
+            type=gha,scope=${{ matrix.variant }}
           cache-to: type=gha,mode=max,scope=${{ matrix.variant }}

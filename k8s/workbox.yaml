@@ -1,5 +1,5 @@
-# Step 1: isolated Claude Code pod for k3s.
-#   kubectl apply -f k8s/claude.yaml
+# Isolated Claude Code sandbox for k3s. Needs the agent-sandbox controller + CRDs installed.
+#   kubectl apply -f k8s/workbox.yaml
 ---
 apiVersion: v1
 kind: Namespace
@@ -10,44 +10,24 @@ metadata:
     pod-security.kubernetes.io/enforce-version: latest
 ---
 apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: claude-home           
-  namespace: workbox
-spec:
-  accessModes: ["ReadWriteOnce"]
-  storageClassName: local-path
-  resources: { requests: { storage: 5Gi } }
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: claude-work            # /work: the agent's working directory
-  namespace: workbox
-spec:
-  accessModes: ["ReadWriteOnce"]
-  storageClassName: local-path
-  resources: { requests: { storage: 20Gi } }
----
-apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: workbox
   namespace: workbox
 automountServiceAccountToken: false
 ---
-apiVersion: apps/v1
-kind: Deployment
+# agent-sandbox (https://github.com/kubernetes-sigs/agent-sandbox): one stateful, singleton pod
+# with stable identity. The pod is named after the Sandbox ("workbox"); the PVCs come from
+# volumeClaimTemplates and are mounted by name.
+apiVersion: agents.x-k8s.io/v1beta1
+kind: Sandbox
 metadata:
   name: workbox
   namespace: workbox
 spec:
-  replicas: 1
-  strategy: { type: Recreate }
-  selector: { matchLabels: { app: workbox } }
-  template:
+  podTemplate:
     metadata:
-      labels: { app: workbox }
+      labels: { app: workbox }        # selected by the NetworkPolicies below
     spec:
       serviceAccountName: workbox
       automountServiceAccountToken: false
@@ -62,8 +42,10 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: claude
-          image: ghcr.io/alex-sviridov/workbox:latest-sudo
-          imagePullPolicy: IfNotPresent
+          # ghcr.io/alex-sviridov/workbox:latest         - toolbox only (1-2Gi memory is plenty)
+          # ghcr.io/alex-sviridov/workbox:latest-ghidra  - + REA + Ghidra (needs the 3Gi limit)
+          image: ghcr.io/alex-sviridov/workbox:latest-ghidra
+          imagePullPolicy: Always
           env:
             # Optional auth via Secret (otherwise run /login once inside the session).
             - name: ANTHROPIC_API_KEY
@@ -74,24 +56,33 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: { drop: ["ALL"] }
-            resources:
-              requests: { cpu: 500m, memory: 1Gi }
-              limits:   { cpu: "2",  memory: 2Gi }
+          resources:
+            requests: { cpu: 500m, memory: 1Gi }
+            limits:   { cpu: "2",  memory: 3Gi }
           livenessProbe:
             exec: { command: ["tmux", "has-session", "-t", "claude"] }
             initialDelaySeconds: 10
             periodSeconds: 30
           volumeMounts:
-            - { name: home, mountPath: /home/node }
-            - { name: work, mountPath: /work }
+            - { name: home, mountPath: /home/node }   # from volumeClaimTemplates
+            - { name: work, mountPath: /work }        # from volumeClaimTemplates
             - { name: tmp,  mountPath: /tmp }
       volumes:
-        - name: home
-          persistentVolumeClaim: { claimName: claude-home }
-        - name: work
-          persistentVolumeClaim: { claimName: claude-work }
         - name: tmp
           emptyDir: { sizeLimit: 2Gi }
+  volumeClaimTemplates:
+    - metadata:
+        name: home             # /home/node: Claude login, settings, user-installed tools
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: local-path
+        resources: { requests: { storage: 5Gi } }
+    - metadata:
+        name: work             # /work: the agent's working directory
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: local-path
+        resources: { requests: { storage: 20Gi } }
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

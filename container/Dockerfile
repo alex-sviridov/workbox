@@ -1,18 +1,16 @@
-# workbox: isolated, always-running Claude Code (bypass-permissions mode) with a full toolbox,
-# plus REA + Ghidra for static reverse engineering of Windows executables.
+# workbox: isolated, always-running Claude Code (bypass-permissions mode) with a full toolbox.
+# Two targets:
+#   base   - Claude Code + toolbox
+#   ghidra - base + REA + Ghidra + JDK 21 for static reverse engineering of Windows executables
 #
-#   docker build --platform linux/amd64 -t workbox:3 .
+#   docker build --platform linux/amd64 --target base   -t workbox:latest .
+#   docker build --platform linux/amd64 --target ghidra -t workbox:latest-ghidra .
 #
 # Base: the full (non-slim) node image = Debian trixie "buildpack-deps" with gcc, make, git, curl,
 # python3 and the usual dev headers already present.
-FROM node:24-trixie
+FROM node:24-trixie AS base
 
 ARG CLAUDE_CODE_VERSION=2.1.296
-ARG REA_VERSION=6.5.0
-# REA's Ghidra provider is verified with exactly Ghidra 12.1.4 + JDK 21.
-ARG GHIDRA_VERSION=12.1.4
-ARG GHIDRA_BUILD_DATE=20260921
-ARG GHIDRA_SHA256=ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -30,39 +28,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       git git-lfs gh openssh-client curl wget rsync netcat-openbsd dnsutils \
       # archives
       zip unzip 7zip xz-utils zstd bzip2 \
-      # binaries & debugging (REA can also drive objdump and gdb)
+      # binaries & debugging
       file xxd binutils gdb strace lsof \
-      # system & misc (procps "ps" is required by REA's process supervisor)
+      # system & misc (procps "ps" is also required by REA's process supervisor in the ghidra image)
       procps psmisc htop sqlite3 shellcheck locales \
-      # Ghidra needs a full 64-bit JDK 21 (REA's doctor checks for javac)
-      openjdk-21-jdk-headless \
  && rm -rf /var/lib/apt/lists/* \
  # Debian names some tools differently
  && ln -s /usr/bin/batcat /usr/local/bin/bat \
  && ln -s /usr/bin/fdfind /usr/local/bin/fd
 
-# Ghidra (official release zip, checked against the SHA-256 published on the release page)
-RUN set -eux; \
-    curl -fsSL -o /tmp/ghidra.zip \
-      "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${GHIDRA_VERSION}_build/ghidra_${GHIDRA_VERSION}_PUBLIC_${GHIDRA_BUILD_DATE}.zip"; \
-    echo "${GHIDRA_SHA256}  /tmp/ghidra.zip" | sha256sum -c -; \
-    unzip -q /tmp/ghidra.zip -d /opt; \
-    rm /tmp/ghidra.zip; \
-    test -x "/opt/ghidra_${GHIDRA_VERSION}_PUBLIC/support/analyzeHeadless"; \
-    test -x "/opt/ghidra_${GHIDRA_VERSION}_PUBLIC/Ghidra/Features/Decompiler/os/linux_x86_64/decompile"
-
 # uv (fast Python package/env manager) system-wide
 RUN pip install --break-system-packages --no-cache-dir uv
 
-# Claude Code + REA, pinned
-RUN npm install --global --no-fund --no-audit \
-      "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
-      "rea-agents@${REA_VERSION}" \
+# Claude Code, pinned
+RUN npm install --global --no-fund --no-audit "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
  && npm cache clean --force
 
 COPY --chmod=0644 tmux.conf /etc/tmux.conf
 COPY --chmod=0644 CLAUDE.md /etc/claude-code/CLAUDE.md
 COPY --chmod=0755 entrypoint.sh claude-loop.sh /usr/local/bin/
+RUN chmod 0755 /etc/claude-code
 
 # Everything the agent installs without root goes under $HOME (a persistent volume).
 ENV HOME=/home/node \
@@ -82,6 +67,45 @@ ENV HOME=/home/node \
     DISABLE_AUTOUPDATER=1 \
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
+# Claude Code refuses --dangerously-skip-permissions as root, so run as the image's "node" user.
+USER 1000:1000
+WORKDIR /work
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
+
+# ---------------------------------------------------------------------------------------------
+FROM base AS ghidra
+
+ARG REA_VERSION=6.5.0
+# REA's Ghidra provider is verified with exactly Ghidra 12.1.4 + JDK 21.
+ARG GHIDRA_VERSION=12.1.4
+ARG GHIDRA_BUILD_DATE=20260921
+ARG GHIDRA_SHA256=ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db
+
+USER root
+
+# Ghidra needs a full 64-bit JDK 21 (REA's doctor checks for javac)
+RUN apt-get update && apt-get install -y --no-install-recommends openjdk-21-jdk-headless \
+ && rm -rf /var/lib/apt/lists/*
+
+# Ghidra (official release zip, checked against the SHA-256 published on the release page)
+RUN set -eux; \
+    curl -fsSL -o /tmp/ghidra.zip \
+      "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${GHIDRA_VERSION}_build/ghidra_${GHIDRA_VERSION}_PUBLIC_${GHIDRA_BUILD_DATE}.zip"; \
+    echo "${GHIDRA_SHA256}  /tmp/ghidra.zip" | sha256sum -c -; \
+    unzip -q /tmp/ghidra.zip -d /opt; \
+    rm /tmp/ghidra.zip; \
+    test -x "/opt/ghidra_${GHIDRA_VERSION}_PUBLIC/support/analyzeHeadless"; \
+    test -x "/opt/ghidra_${GHIDRA_VERSION}_PUBLIC/Ghidra/Features/Decompiler/os/linux_x86_64/decompile"
+
+# REA, pinned
+RUN npm install --global --no-fund --no-audit "rea-agents@${REA_VERSION}" \
+ && npm cache clean --force
+
+# Append the reverse-engineering section to the agent's CLAUDE.md
+COPY --chmod=0644 CLAUDE.ghidra.md /tmp/CLAUDE.ghidra.md
+RUN cat /tmp/CLAUDE.ghidra.md >>/etc/claude-code/CLAUDE.md && rm /tmp/CLAUDE.ghidra.md
+
 # REA + Ghidra
 #  - REA_GHIDRA_STARTUP_TIMEOUT_MS: import + full auto-analysis deadline (REA default 330 s; big binaries need more)
 #  - GHIDRA_HEADLESS_MAXMEM: Ghidra JVM heap (REA default 2G); keep well below the pod memory limit
@@ -94,8 +118,4 @@ ENV GHIDRA_INSTALL_DIR=/opt/ghidra_${GHIDRA_VERSION}_PUBLIC \
     MCP_TOOL_TIMEOUT=1200000 \
     REA_VERSION=${REA_VERSION}
 
-# Claude Code refuses --dangerously-skip-permissions as root, so run as the image's "node" user.
 USER 1000:1000
-WORKDIR /work
-
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
